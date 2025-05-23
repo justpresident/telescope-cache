@@ -1,3 +1,8 @@
+-- File structure:
+-- lua/telescope-cache/init.lua (this file)
+-- plugin/telescope-cache.lua (commands)
+
+-- lua/telescope-cache/init.lua
 local telescope = require('telescope')
 local finders = require('telescope.finders')
 local pickers = require('telescope.pickers')
@@ -326,6 +331,39 @@ function M.find_files()
   }):find()
 end
 
+local function grep_cached_files(prompt)
+  local results = {}
+
+  if not prompt or prompt == "" then
+    return results
+  end
+
+  for file_path, _ in pairs(cache_db) do
+    local content = read_cache_file(file_path)
+    if content then
+      local lines = vim.split(content, '\n')
+      for line_num, line in ipairs(lines) do
+        if line:lower():find(prompt:lower(), 1, true) then
+          local relative_path = file_path
+          if #config.directories > 0 then
+            relative_path = file_path:gsub('^' .. vim.pesc(config.directories[1]) .. '/', '')
+          end
+
+          table.insert(results, {
+            filename = file_path,
+            lnum = line_num,
+            col = 1,
+            text = line,
+            display = string.format("%s:%d:%s", relative_path, line_num, line),
+          })
+        end
+      end
+    end
+  end
+
+  return results
+end
+
 function M.live_grep()
   -- Auto-refresh if needed
   if config.auto_refresh and (os.time() - last_refresh) > config.refresh_interval then
@@ -334,66 +372,59 @@ function M.live_grep()
 
   pickers.new({}, {
     prompt_title = "Live Grep (Cached)",
-    finder = finders.new_async_job {
-      command_generator = function(prompt)
-        if not prompt or prompt == "" then
-          return nil
-        end
-
-        local results = {}
-        for file_path, _ in pairs(cache_db) do
-          local content = read_cache_file(file_path)
-          if content then
-            local lines = vim.split(content, '\n')
-            for line_num, line in ipairs(lines) do
-              if line:lower():find(prompt:lower()) then
-                local relative_path = file_path
-                if #config.directories > 0 then
-                  relative_path = file_path:gsub('^' .. vim.pesc(config.directories[1]) .. '/', '')
-                end
-                table.insert(results, string.format("%s:%d:%s", relative_path, line_num, line))
-              end
-            end
-          end
-        end
-
-        return { command = "echo", args = results }
+    finder = finders.new_dynamic {
+      fn = function(prompt)
+        return grep_cached_files(prompt)
       end,
       entry_maker = function(entry)
-        local parts = vim.split(entry, ":", { plain = true })
-        if #parts >= 3 then
-          local file = parts[1]
-          local line_num = tonumber(parts[2]) or 1
-          local text = table.concat(parts, ":", 3)
-
-          return {
-            value = entry,
-            display = entry,
-            ordinal = entry,
-            filename = file,
-            lnum = line_num,
-            text = text,
-          }
-        end
-        return nil
+        return {
+          value = entry,
+          display = entry.display,
+          ordinal = entry.display,
+          filename = entry.filename,
+          lnum = entry.lnum,
+          col = entry.col,
+          text = entry.text,
+        }
       end,
     },
     sorter = conf.generic_sorter({}),
-    previewer = conf.grep_previewer({}),
+    previewer = previewers.new_buffer_previewer {
+      title = "File Preview (Cached)",
+      get_buffer_by_name = function(_, entry)
+        return entry.filename
+      end,
+      define_preview = function(self, entry)
+        local content = read_cache_file(entry.filename)
+        if content then
+          local lines = vim.split(content, '\n')
+          vim.api.nvim_buf_set_lines(self.state.bufnr, 0, -1, false, lines)
+
+          -- Set filetype for syntax highlighting
+          local ft = vim.filetype.match({ filename = entry.filename })
+          if ft then
+            vim.api.nvim_buf_set_option(self.state.bufnr, 'filetype', ft)
+          end
+
+          -- Highlight the search result line
+          if entry.lnum then
+            vim.api.nvim_buf_add_highlight(self.state.bufnr, 0, 'TelescopePreviewLine', entry.lnum - 1, 0, -1)
+            -- Try to center the line in preview
+            pcall(vim.api.nvim_win_set_cursor, self.state.winid, {entry.lnum, 0})
+          end
+        else
+          vim.api.nvim_buf_set_lines(self.state.bufnr, 0, -1, false, {"File not found in cache"})
+        end
+      end
+    },
     attach_mappings = function(prompt_bufnr, map)
       actions.select_default:replace(function()
         actions.close(prompt_bufnr)
         local selection = action_state.get_selected_entry()
         if selection and selection.filename then
-          local full_path = selection.filename
-          -- Convert relative path back to full path
-          if not full_path:match('^/') and #config.directories > 0 then
-            full_path = config.directories[1] .. '/' .. full_path
-          end
-
-          vim.cmd('edit ' .. full_path)
+          vim.cmd('edit ' .. selection.filename)
           if selection.lnum then
-            vim.api.nvim_win_set_cursor(0, {selection.lnum, 0})
+            vim.api.nvim_win_set_cursor(0, {selection.lnum, selection.col or 0})
           end
         end
       end)
