@@ -21,26 +21,58 @@ local M = {}
 -- Default configuration
 local default_config = {
   cache_dir = vim.fn.stdpath('cache') .. '/telescope-cache',
+  db_name = 'cache.db',
   directories = {},
   filetypes = { '*.lua', '*.py', '*.js', '*.ts', '*.go', '*.rs', '*.c', '*.cpp', '*.h', '*.java', '*.md', '*.txt' },
   ignore_patterns = { '.git', 'node_modules', '__pycache__', '.pytest_cache', 'target', 'build' },
   max_file_size = 1024 * 1024, -- 1MB
   auto_refresh = true,
   refresh_interval = 300, -- 5 minutes
+  -- Encryption settings
+  use_encryption = true,
+  password_prompt = true, -- Prompt for password on first use
+  session_timeout = 3600, -- 1 hour - auto-lock after inactivity
 }
 
 local config = vim.tbl_deep_extend('force', {}, default_config)
-local cache_db = {}
-local last_refresh = 0
+local db_connection = nil
+local db_password = nil
+local last_activity = 0
+local is_unlocked = false
 
--- Utility functions
-local function get_cache_file_path(file_path)
-  local cache_path = config.cache_dir .. '/' .. file_path:gsub('/', '_SLASH_')
-  return cache_path
+-- Password and encryption utilities
+local function hash_password(password)
+  -- Simple hash for key derivation - in production, use a proper KDF
+  local hash = 0
+  for i = 1, #password do
+    hash = (hash * 31 + string.byte(password, i)) % 2147483647
+  end
+  return tostring(hash)
 end
 
-local function get_metadata_path()
-  return config.cache_dir .. '/metadata.json'
+local function prompt_password(confirm)
+  local password
+  if confirm then
+    password = vim.fn.inputsecret("Enter new cache password: ")
+    if password == "" then
+      return nil
+    end
+    local confirm_password = vim.fn.inputsecret("Confirm password: ")
+    if password ~= confirm_password then
+      print("Passwords don't match!")
+      return nil
+    end
+  else
+    password = vim.fn.inputsecret("Enter cache password: ")
+    if password == "" then
+      return nil
+    end
+  end
+  return password
+end
+
+local function get_db_path()
+  return config.cache_dir .. '/' .. config.db_name
 end
 
 local function ensure_cache_dir()
@@ -50,6 +82,160 @@ local function ensure_cache_dir()
   end
 end
 
+local function check_session_timeout()
+  if config.use_encryption and is_unlocked and config.session_timeout > 0 then
+    if os.time() - last_activity > config.session_timeout then
+      M.lock_cache()
+      return false
+    end
+  end
+  return true
+end
+
+local function update_activity()
+  last_activity = os.time()
+end
+
+-- Database operations
+local function init_database()
+  if not config.use_encryption then
+    -- Use regular SQLite without encryption
+    local sqlite_available, sqlite = pcall(require, 'sqlite')
+    if not sqlite_available then
+      print("Error: lua-sqlite3 not available. Install with your package manager.")
+      return false
+    end
+
+    local db_path = get_db_path()
+    db_connection = sqlite.open(db_path)
+
+    if not db_connection then
+      print("Error: Could not open database")
+      return false
+    end
+  else
+    -- Try to use SQLCipher for encryption
+    local sqlite_available, sqlite = pcall(require, 'lsqlite3')
+    if not sqlite_available then
+      print("Error: lsqlite3 not available. Install with: luarocks install lsqlite3")
+      return false
+    end
+
+    local db_path = get_db_path()
+    db_connection = sqlite.open(db_path)
+
+    if not db_connection then
+      print("Error: Could not open database")
+      return false
+    end
+
+    -- Set encryption key if password is provided
+    if db_password then
+      local pragma_result = db_connection:exec("PRAGMA key = '" .. db_password .. "';")
+      if pragma_result ~= sqlite.OK then
+        print("Error: Could not set encryption key")
+        db_connection:close()
+        db_connection = nil
+        return false
+      end
+    end
+  end
+
+  -- Create tables
+  local create_files_table = [[
+    CREATE TABLE IF NOT EXISTS cached_files (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      file_path TEXT UNIQUE NOT NULL,
+      content TEXT NOT NULL,
+      file_size INTEGER NOT NULL,
+      mtime INTEGER NOT NULL,
+      cached_at INTEGER NOT NULL
+    );
+  ]]
+
+  local create_metadata_table = [[
+    CREATE TABLE IF NOT EXISTS cache_metadata (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+  ]]
+
+  local create_index = [[
+    CREATE INDEX IF NOT EXISTS idx_file_path ON cached_files(file_path);
+  ]]
+
+  local result1 = db_connection:exec(create_files_table)
+  local result2 = db_connection:exec(create_metadata_table)
+  local result3 = db_connection:exec(create_index)
+
+  if result1 ~= 0 or result2 ~= 0 or result3 ~= 0 then
+    print("Error creating database tables: " .. (db_connection:errmsg() or "unknown error"))
+    return false
+  end
+
+  return true
+end
+
+function M.unlock_cache()
+  if not config.use_encryption then
+    is_unlocked = true
+    return init_database()
+  end
+
+  local db_path = get_db_path()
+  local db_exists = Path:new(db_path):exists()
+
+  if not db_exists and config.password_prompt then
+    print("Creating new encrypted cache database...")
+    db_password = prompt_password(true) -- Confirm password for new database
+  elseif config.password_prompt then
+    db_password = prompt_password(false) -- Enter existing password
+  end
+
+  if not db_password then
+    print("Password required for encrypted cache")
+    return false
+  end
+
+  local success = init_database()
+  if success then
+    is_unlocked = true
+    update_activity()
+    print("Cache unlocked successfully")
+  else
+    db_password = nil
+    print("Failed to unlock cache - incorrect password?")
+  end
+
+  return success
+end
+
+function M.lock_cache()
+  if db_connection then
+    db_connection:close()
+    db_connection = nil
+  end
+  db_password = nil
+  is_unlocked = false
+  print("Cache locked")
+end
+
+function M.is_cache_locked()
+  return config.use_encryption and not is_unlocked
+end
+
+local function ensure_unlocked()
+  if M.is_cache_locked() then
+    return M.unlock_cache()
+  end
+  if not check_session_timeout() then
+    return M.unlock_cache()
+  end
+  update_activity()
+  return true
+end
+
+-- File operations with database
 local function should_cache_file(file_path)
   -- Check file size
   local stat = uv.fs_stat(file_path)
@@ -118,78 +304,93 @@ local function read_file_content(file_path)
   return content
 end
 
-local function write_cache_file(file_path, content)
-  local cache_path = get_cache_file_path(file_path)
-  local cache_file = io.open(cache_path, 'w')
-  if cache_file then
-    cache_file:write(content)
-    cache_file:close()
-    return true
-  end
-  return false
-end
+local function get_cached_file(file_path)
+  if not db_connection then return nil end
 
-local function read_cache_file(file_path)
-  local cache_path = get_cache_file_path(file_path)
-  local cache_file = io.open(cache_path, 'r')
-  if cache_file then
-    local content = cache_file:read('*all')
-    cache_file:close()
-    return content
+  local stmt = db_connection:prepare("SELECT content, mtime FROM cached_files WHERE file_path = ?")
+  if not stmt then return nil end
+
+  stmt:bind(1, file_path)
+  local result = stmt:step()
+
+  if result == 100 then -- SQLITE_ROW
+    local content = stmt:get_value(0)
+    local mtime = stmt:get_value(1)
+    stmt:finalize()
+    return content, mtime
   end
+
+  stmt:finalize()
   return nil
 end
 
-local function save_metadata()
-  local metadata = {
-    cache_db = cache_db,
-    last_refresh = last_refresh,
-    config = config
-  }
+local function save_cached_file(file_path, content, file_size, mtime)
+  if not db_connection then return false end
 
-  local metadata_file = io.open(get_metadata_path(), 'w')
-  if metadata_file then
-    metadata_file:write(vim.fn.json_encode(metadata))
-    metadata_file:close()
-  end
+  local stmt = db_connection:prepare([[
+    INSERT OR REPLACE INTO cached_files (file_path, content, file_size, mtime, cached_at)
+    VALUES (?, ?, ?, ?, ?)
+  ]])
+
+  if not stmt then return false end
+
+  stmt:bind(1, file_path)
+  stmt:bind(2, content)
+  stmt:bind(3, file_size)
+  stmt:bind(4, mtime)
+  stmt:bind(5, os.time())
+
+  local result = stmt:step()
+  stmt:finalize()
+
+  return result == 101 -- SQLITE_DONE
 end
 
-local function load_metadata()
-  local metadata_file = io.open(get_metadata_path(), 'r')
-  if metadata_file then
-    local content = metadata_file:read('*all')
-    metadata_file:close()
+local function get_all_cached_files()
+  if not db_connection then return {} end
 
-    local ok, metadata = pcall(vim.fn.json_decode, content)
-    if ok and metadata then
-      cache_db = metadata.cache_db or {}
-      last_refresh = metadata.last_refresh or 0
-      return true
-    end
+  local files = {}
+  local stmt = db_connection:prepare("SELECT file_path, mtime, file_size FROM cached_files ORDER BY file_path")
+  if not stmt then return files end
+
+  while stmt:step() == 100 do -- SQLITE_ROW
+    local file_path = stmt:get_value(0)
+    local mtime = stmt:get_value(1)
+    local file_size = stmt:get_value(2)
+
+    files[file_path] = {
+      mtime = mtime,
+      size = file_size,
+    }
   end
-  return false
+
+  stmt:finalize()
+  return files
 end
 
 local function update_cache_entry(file_path)
   local stat = uv.fs_stat(file_path)
   if not stat then
-    cache_db[file_path] = nil
+    -- File no longer exists, remove from cache
+    if db_connection then
+      local stmt = db_connection:prepare("DELETE FROM cached_files WHERE file_path = ?")
+      if stmt then
+        stmt:bind(1, file_path)
+        stmt:step()
+        stmt:finalize()
+      end
+    end
     return false
   end
 
-  local cached_entry = cache_db[file_path]
-  local needs_update = not cached_entry or cached_entry.mtime < stat.mtime.sec
+  local cached_content, cached_mtime = get_cached_file(file_path)
+  local needs_update = not cached_content or cached_mtime < stat.mtime.sec
 
   if needs_update then
     local content = read_file_content(file_path)
     if content then
-      write_cache_file(file_path, content)
-      cache_db[file_path] = {
-        mtime = stat.mtime.sec,
-        size = stat.size,
-        cached_at = os.time()
-      }
-      return true
+      local success = save_cached_file(file_path, content, stat.size, stat.mtime.sec)
+      return success
     end
   end
 
@@ -198,6 +399,11 @@ end
 
 -- Main cache functions
 function M.refresh_cache()
+  if not ensure_unlocked() then
+    print("Cache is locked. Use :TelescopeCacheUnlock to unlock.")
+    return
+  end
+
   ensure_cache_dir()
 
   print("Refreshing cache...")
@@ -215,47 +421,85 @@ function M.refresh_cache()
     end
   end
 
-  last_refresh = os.time()
-  save_metadata()
+  -- Update metadata
+  if db_connection then
+    local stmt = db_connection:prepare("INSERT OR REPLACE INTO cache_metadata (key, value) VALUES (?, ?)")
+    if stmt then
+      stmt:bind(1, "last_refresh")
+      stmt:bind(2, tostring(os.time()))
+      stmt:step()
+      stmt:finalize()
+    end
+  end
 
   print(string.format("Cache refresh complete: %d/%d files updated", updated_files, total_files))
 end
 
 function M.clear_cache()
-  -- Remove cache files
-  local cache_path = Path:new(config.cache_dir)
-  if cache_path:exists() then
-    cache_path:rm({ recursive = true })
+  if not ensure_unlocked() then
+    print("Cache is locked. Use :TelescopeCacheUnlock to unlock.")
+    return
   end
 
-  cache_db = {}
-  last_refresh = 0
+  if db_connection then
+    db_connection:exec("DELETE FROM cached_files")
+    db_connection:exec("DELETE FROM cache_metadata")
+  end
 
   print("Cache cleared")
 end
 
 function M.get_cache_stats()
+  if not ensure_unlocked() then
+    return {
+      cached_files = 0,
+      total_size = 0,
+      last_refresh = 0,
+      cache_dir = config.cache_dir,
+      locked = true
+    }
+  end
+
   local cached_files = 0
   local total_size = 0
+  local last_refresh = 0
 
-  for file_path, entry in pairs(cache_db) do
-    cached_files = cached_files + 1
-    total_size = total_size + (entry.size or 0)
+  if db_connection then
+    -- Get file count and total size
+    local stmt = db_connection:prepare("SELECT COUNT(*), SUM(file_size) FROM cached_files")
+    if stmt and stmt:step() == 100 then
+      cached_files = stmt:get_value(0) or 0
+      total_size = stmt:get_value(1) or 0
+      stmt:finalize()
+    end
+
+    -- Get last refresh time
+    local stmt2 = db_connection:prepare("SELECT value FROM cache_metadata WHERE key = 'last_refresh'")
+    if stmt2 and stmt2:step() == 100 then
+      last_refresh = tonumber(stmt2:get_value(0)) or 0
+      stmt2:finalize()
+    end
   end
 
   return {
     cached_files = cached_files,
     total_size = total_size,
     last_refresh = last_refresh,
-    cache_dir = config.cache_dir
+    cache_dir = config.cache_dir,
+    locked = false
   }
 end
 
 -- Telescope picker functions
 local function create_finder()
-  local entries = {}
+  if not ensure_unlocked() then
+    return finders.new_table { results = {} }
+  end
 
-  for file_path, _ in pairs(cache_db) do
+  local entries = {}
+  local cached_files = get_all_cached_files()
+
+  for file_path, _ in pairs(cached_files) do
     local relative_path = file_path
     -- Try to make path relative to first configured directory
     if #config.directories > 0 then
@@ -284,7 +528,12 @@ local function create_previewer()
       return entry.value
     end,
     define_preview = function(self, entry)
-      local content = read_cache_file(entry.value)
+      if not ensure_unlocked() then
+        vim.api.nvim_buf_set_lines(self.state.bufnr, 0, -1, false, {"Cache is locked"})
+        return
+      end
+
+      local content = get_cached_file(entry.value)
       if content then
         local lines = vim.split(content, '\n')
         vim.api.nvim_buf_set_lines(self.state.bufnr, 0, -1, false, lines)
@@ -302,9 +551,17 @@ local function create_previewer()
 end
 
 function M.find_files()
+  if not ensure_unlocked() then
+    print("Cache is locked. Use :TelescopeCacheUnlock to unlock.")
+    return
+  end
+
   -- Auto-refresh if needed
-  if config.auto_refresh and (os.time() - last_refresh) > config.refresh_interval then
-    M.refresh_cache()
+  if config.auto_refresh then
+    local stats = M.get_cache_stats()
+    if (os.time() - stats.last_refresh) > config.refresh_interval then
+      M.refresh_cache()
+    end
   end
 
   pickers.new({}, {
@@ -338,8 +595,14 @@ local function grep_cached_files(prompt)
     return results
   end
 
-  for file_path, _ in pairs(cache_db) do
-    local content = read_cache_file(file_path)
+  if not ensure_unlocked() then
+    return results
+  end
+
+  local cached_files = get_all_cached_files()
+
+  for file_path, _ in pairs(cached_files) do
+    local content = get_cached_file(file_path)
     if content then
       local lines = vim.split(content, '\n')
       for line_num, line in ipairs(lines) do
@@ -365,9 +628,17 @@ local function grep_cached_files(prompt)
 end
 
 function M.live_grep()
+  if not ensure_unlocked() then
+    print("Cache is locked. Use :TelescopeCacheUnlock to unlock.")
+    return
+  end
+
   -- Auto-refresh if needed
-  if config.auto_refresh and (os.time() - last_refresh) > config.refresh_interval then
-    M.refresh_cache()
+  if config.auto_refresh then
+    local stats = M.get_cache_stats()
+    if (os.time() - stats.last_refresh) > config.refresh_interval then
+      M.refresh_cache()
+    end
   end
 
   pickers.new({}, {
@@ -395,7 +666,12 @@ function M.live_grep()
         return entry.filename
       end,
       define_preview = function(self, entry)
-        local content = read_cache_file(entry.filename)
+        if not ensure_unlocked() then
+          vim.api.nvim_buf_set_lines(self.state.bufnr, 0, -1, false, {"Cache is locked"})
+          return
+        end
+
+        local content = get_cached_file(entry.filename)
         if content then
           local lines = vim.split(content, '\n')
           vim.api.nvim_buf_set_lines(self.state.bufnr, 0, -1, false, lines)
@@ -449,7 +725,11 @@ function M.setup(opts)
   end
 
   ensure_cache_dir()
-  load_metadata()
+
+  -- Auto-unlock on startup if not using encryption
+  if not config.use_encryption then
+    M.unlock_cache()
+  end
 end
 
 -- Telescope extension registration
@@ -465,6 +745,9 @@ local function register_extension()
       refresh_cache = M.refresh_cache,
       clear_cache = M.clear_cache,
       cache_stats = M.get_cache_stats,
+      unlock_cache = M.unlock_cache,
+      lock_cache = M.lock_cache,
+      is_cache_locked = M.is_cache_locked,
     }
   }
 end
