@@ -41,21 +41,14 @@ vim.keymap.set('n', '<leader>scr', '<cmd>TelescopeCacheRefresh<cr>', { desc = '[
 
 Following commands are available:
 
-**TelescopeCacheRefresh**: Refresh the cache. It will be initialized if it doesn't exist. And the password will be asked if encryption is enabled
-
-**TelescopeCacheClear**: Clears all the cache
-
-**TelescopeCacheStats**: Print cache stats
-
-**TelescopeCacheFiles**: Find files in cache
-
-**TelescopeCacheGrep**: Find by grep
-
-**TelescopeCacheUnlock**: Unlock cache. It will ask the password if encryption is enabled
-
-**TelescopeCacheLock**: Lock the cache if it is unlocked. It will require entering a password again to access it
-
-**TelescopeCacheStatus**: Prints cache status: Locked or Unlocked
+- **TelescopeCacheRefresh**: Refresh the cache. It will be initialized if it doesn't exist. And the password will be asked if encryption is enabled
+- **TelescopeCacheClear**: Clears all the cache
+- **TelescopeCacheStats**: Print cache stats
+- **TelescopeCacheFiles**: Find files in cache
+- **TelescopeCacheGrep**: Find by grep
+- **TelescopeCacheUnlock**: Unlock cache. It will ask the password if encryption is enabled
+- **TelescopeCacheLock**: Lock the cache if it is unlocked. It will require entering a password again to access it
+- **TelescopeCacheStatus**: Prints cache status: Locked or Unlocked
 
 ## Contributing
 
