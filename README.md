@@ -6,7 +6,7 @@ An extension for Neovim Telescope plugin that provides persistent caching for sp
 
 First, add 'justpresident/telescope-cache' to dependencies list of nvim-telescope/telescope.nvim plugin
 
-Second, configured through Telescope's setup function:
+Second, configure through Telescope's setup function:
 
 ```lua
 require('telescope').setup({
@@ -26,6 +26,10 @@ require('telescope').setup({
       max_file_size = 1024 * 1024,
       auto_refresh = true,
       refresh_interval = 3600,
+      -- Encryption settings
+      use_encryption = true,
+      password_prompt = true, -- Prompt for password on first use
+      session_timeout = 3600, -- 1 hour - auto-lock after inactivity
     }
   }
 })
@@ -35,6 +39,15 @@ require('telescope').load_extension('cache')
 vim.keymap.set('n', '<leader>scf', '<cmd>TelescopeCacheFiles<cr>', { desc = '[S]earch [C]ached [F]iles' })
 vim.keymap.set('n', '<leader>scg', '<cmd>TelescopeCacheGrep<cr>', { desc = '[S]earch [C]ached by [G]rep' })
 vim.keymap.set('n', '<leader>scr', '<cmd>TelescopeCacheRefresh<cr>', { desc = '[S]earch [C]ache [R]efresh' })
+```
+
+## Dependencies
+
+The plugin requires lua sqlite library to be installed. On Ubuntu it is installed with:
+
+```
+sudo apt install libsqlite3-dev luarocks
+sudo luarocks install lsqlite3
 ```
 
 ## Usage
