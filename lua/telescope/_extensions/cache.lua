@@ -15,5 +15,8 @@ return telescope.register_extension {
     refresh_cache = cache_plugin.refresh_cache,
     clear_cache = cache_plugin.clear_cache,
     cache_stats = cache_plugin.get_cache_stats,
+    unlock_cache = cache_plugin.unlock_cache,
+    lock_cache = cache_plugin.lock_cache,
+    is_cache_locked = cache_plugin.is_cache_locked
   }
 }
