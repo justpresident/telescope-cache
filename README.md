@@ -2,6 +2,8 @@
 
 An extension for Neovim Telescope plugin that provides persistent caching for specified directories. The main use case is caching files from slow filesystems and for offline work on files from remote filesystems.
 
+For example, if your code is on the remote filesystem and is not accessible offline, you can run :TelescopeCacheRefresh which will cache folders specified in the config in an sqlite3 database. Then, when you are offline you can interact with the files using Telescope find and grep tools as if the filesystem was still mounted.
+
 ## Configuration
 
 First, add 'justpresident/telescope-cache' to dependencies list of nvim-telescope/telescope.nvim plugin
