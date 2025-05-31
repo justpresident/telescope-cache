@@ -69,6 +69,14 @@ Following commands are available:
 - **TelescopeCacheLock**: Lock the cache if it is unlocked. It will require entering a password again to access it
 - **TelescopeCacheStatus**: Prints cache status: Locked or Unlocked
 
+## Troubleshooting
+
+If `require sqlite` command fails, it might be that sqlite is installed either for wrong version of lua that Neovim uses or into a folder that neovim doesn't know about.
+
+- You can specify lua version in the install command: `sudo luarocks install --lua-version 5.1 lsqlite3`
+
+- You might need to link installed library to the place that Neovim knows about, like: `sudo ln -s /usr/lib64/lua/5.1/lsqlite3.so /usr/local/lib/lua/5.1/`
+
 ## Contributing
 
 Contributions are welcome! Please feel free to submit issues, feature requests, or pull requests.
