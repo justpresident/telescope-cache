@@ -27,7 +27,7 @@ local default_config = {
   ignore_patterns = { '.git', 'node_modules', '__pycache__', '.pytest_cache', 'target', 'build' },
   max_file_size = 1024 * 1024, -- 1MB
   auto_refresh = true,
-  refresh_interval = 300, -- 5 minutes
+  refresh_interval = 300,      -- 5 minutes
   -- Encryption settings
   use_encryption = true,
   password_prompt = true, -- Prompt for password on first use
@@ -117,7 +117,7 @@ local function init_database()
     -- Try to use SQLCipher for encryption
     local sqlite_available, sqlite = pcall(require, 'lsqlite3')
     if not sqlite_available then
-      print("Error: lsqlite3 not available. Install with: luarocks install lsqlite3")
+      print("Error: lsqlite3 not available. Install with: luarocks install --lua-version 5.1 lsqlite3:", sqlite)
       return false
     end
 
@@ -187,7 +187,7 @@ function M.unlock_cache()
 
   if not db_exists and config.password_prompt then
     print("Creating new encrypted cache database...")
-    db_password = prompt_password(true) -- Confirm password for new database
+    db_password = prompt_password(true)  -- Confirm password for new database
   elseif config.password_prompt then
     db_password = prompt_password(false) -- Enter existing password
   end
@@ -529,7 +529,7 @@ local function create_previewer()
     end,
     define_preview = function(self, entry)
       if not ensure_unlocked() then
-        vim.api.nvim_buf_set_lines(self.state.bufnr, 0, -1, false, {"Cache is locked"})
+        vim.api.nvim_buf_set_lines(self.state.bufnr, 0, -1, false, { "Cache is locked" })
         return
       end
 
@@ -544,7 +544,7 @@ local function create_previewer()
           vim.api.nvim_buf_set_option(self.state.bufnr, 'filetype', ft)
         end
       else
-        vim.api.nvim_buf_set_lines(self.state.bufnr, 0, -1, false, {"File not found in cache"})
+        vim.api.nvim_buf_set_lines(self.state.bufnr, 0, -1, false, { "File not found in cache" })
       end
     end
   }
@@ -667,7 +667,7 @@ function M.live_grep()
       end,
       define_preview = function(self, entry)
         if not ensure_unlocked() then
-          vim.api.nvim_buf_set_lines(self.state.bufnr, 0, -1, false, {"Cache is locked"})
+          vim.api.nvim_buf_set_lines(self.state.bufnr, 0, -1, false, { "Cache is locked" })
           return
         end
 
@@ -686,10 +686,10 @@ function M.live_grep()
           if entry.lnum then
             vim.api.nvim_buf_add_highlight(self.state.bufnr, 0, 'TelescopePreviewLine', entry.lnum - 1, 0, -1)
             -- Try to center the line in preview
-            pcall(vim.api.nvim_win_set_cursor, self.state.winid, {entry.lnum, 0})
+            pcall(vim.api.nvim_win_set_cursor, self.state.winid, { entry.lnum, 0 })
           end
         else
-          vim.api.nvim_buf_set_lines(self.state.bufnr, 0, -1, false, {"File not found in cache"})
+          vim.api.nvim_buf_set_lines(self.state.bufnr, 0, -1, false, { "File not found in cache" })
         end
       end
     },
@@ -700,7 +700,7 @@ function M.live_grep()
         if selection and selection.filename then
           vim.cmd('edit ' .. selection.filename)
           if selection.lnum then
-            vim.api.nvim_win_set_cursor(0, {selection.lnum, selection.col or 0})
+            vim.api.nvim_win_set_cursor(0, { selection.lnum, selection.col or 0 })
           end
         end
       end)
