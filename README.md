@@ -43,10 +43,16 @@ vim.keymap.set('n', '<leader>scr', '<cmd>TelescopeCacheRefresh<cr>', { desc = '[
 
 ## Dependencies
 
-The plugin requires lua sqlite library to be installed. On Ubuntu it is installed with:
+The plugin requires lua sqlite library to be installed. 
 
+#### On Ubuntu:
 ```
 sudo apt install libsqlite3-dev luarocks
+sudo luarocks install lsqlite3
+```
+#### On Fedora:
+```
+sudo dnf install luarocks sqlite-devel
 sudo luarocks install lsqlite3
 ```
 
