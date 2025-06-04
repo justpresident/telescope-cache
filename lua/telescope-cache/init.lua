@@ -23,7 +23,10 @@ local default_config = {
   cache_dir = vim.fn.stdpath('cache') .. '/telescope-cache',
   db_name = 'cache.db',
   directories = {},
-  filetypes = { '*.lua', '*.py', '*.js', '*.ts', '*.go', '*.rs', '*.c', '*.cpp', '*.h', '*.java', '*.md', '*.txt' },
+  allow_patterns = {
+    '%.lua$', '%.py$', '%.rs$', '%.c$', "%.h$", "%.cpp$",
+    "Makefile$", "Dockerfile$", "BUCK$", "TARGETS$", "%.bzl$"
+  },
   ignore_patterns = { '.git', 'node_modules', '__pycache__', '.pytest_cache', 'target', 'build' },
   max_file_size = 1024 * 1024, -- 1MB
   auto_refresh = true,
@@ -243,9 +246,9 @@ local function should_cache_file(file_path)
     return false
   end
 
-  -- Check if file matches any of the configured filetypes
-  for _, pattern in ipairs(config.filetypes) do
-    if file_path:match(pattern:gsub('%*', '.*')) then
+  -- Check if file matches any of the configured allow_patterns
+  for _, pattern in ipairs(config.allow_patterns) do
+    if file_path:match(pattern) then
       return true
     end
   end

@@ -20,10 +20,12 @@ require('telescope').setup({
         '/path/to/dir_to_cache',
         '/another/path/to/cache',
       }
-      filetypes = {
-        '*.lua', '*.py', '*.rs', '*.c', "*.h", "*.cpp",
-        "Makefile", "Dockerfile"
+      -- list of patterns for full file path. All files that match at least one of these will be cached
+      allow_patterns = {
+        '%.lua$', '%.py$', '%.rs$', '%.c$', "%.h$", "%.cpp$",
+        "Makefile$", "Dockerfile$", "BUCK$", "TARGETS$", "%.bzl$"
       },
+      -- list of patterns for full file path. All the files or directories that match at least one of these will be skipped
       ignore_patterns = { '.git', '__pycache__', '.pytest_cache', 'target', 'build', 'buck-out'},
       max_file_size = 1024 * 1024,
       auto_refresh = true,
