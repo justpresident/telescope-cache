@@ -437,6 +437,7 @@ function M.get_cache_stats()
       total_size = 0,
       last_refresh = 0,
       cache_dir = config.cache_dir,
+      directories = config.directories,
       locked = true
     }
   end
@@ -467,6 +468,7 @@ function M.get_cache_stats()
     total_size = total_size,
     last_refresh = last_refresh,
     cache_dir = config.cache_dir,
+    directories = config.directories,
     locked = false
   }
 end

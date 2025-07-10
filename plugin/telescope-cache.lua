@@ -21,6 +21,10 @@ vim.api.nvim_create_user_command('TelescopeCacheStats', function()
   print("  Total size: " .. string.format("%.2f MB", stats.total_size / 1024 / 1024))
   print("  Last refresh: " .. (stats.last_refresh > 0 and os.date("%Y-%m-%d %H:%M:%S", stats.last_refresh) or "Never"))
   print("  Cache directory: " .. stats.cache_dir)
+  print("  Directories: ")
+  for i, dir in ipairs(stats.directories) do
+      print(string.format("    %d : %s", i, dir))
+  end
   print("  Status: " .. (stats.locked and "Locked" or "Unlocked"))
 end, { desc = 'Show telescope cache statistics' })
 
