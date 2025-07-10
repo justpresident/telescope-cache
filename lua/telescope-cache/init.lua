@@ -349,28 +349,6 @@ local function save_cached_file(file_path, content, file_size, mtime)
   return result == 101 -- SQLITE_DONE
 end
 
-local function get_all_cached_files()
-  if not db_connection then return {} end
-
-  local files = {}
-  local stmt = db_connection:prepare("SELECT file_path, mtime, file_size FROM cached_files ORDER BY file_path")
-  if not stmt then return files end
-
-  while stmt:step() == 100 do -- SQLITE_ROW
-    local file_path = stmt:get_value(0)
-    local mtime = stmt:get_value(1)
-    local file_size = stmt:get_value(2)
-
-    files[file_path] = {
-      mtime = mtime,
-      size = file_size,
-    }
-  end
-
-  stmt:finalize()
-  return files
-end
-
 local function update_cache_entry(file_path)
   local stat = uv.fs_stat(file_path)
   if not stat then
@@ -494,63 +472,36 @@ function M.get_cache_stats()
 end
 
 -- Telescope picker functions
-local function create_finder()
-  if not ensure_unlocked() then
-    return finders.new_table { results = {} }
+
+local function find_cached_files(prompt)
+  local results = {}
+
+  if not prompt or prompt == "" then
+    return results
   end
 
-  local entries = {}
-  local cached_files = get_all_cached_files()
+  if not ensure_unlocked() then
+    return results
+  end
 
-  for file_path, _ in pairs(cached_files) do
-    local relative_path = file_path
-    -- Try to make path relative to first configured directory
-    if #config.directories > 0 then
-      relative_path = file_path:gsub('^' .. vim.pesc(config.directories[1]) .. '/', '')
-    end
+  if not db_connection then return results end
 
-    table.insert(entries, {
-      value = file_path,
-      display = relative_path,
-      ordinal = relative_path,
+  local stmt = db_connection:prepare("SELECT file_path from cached_files where file_path like '%" .. prompt .. "%' ORDER BY file_path COLLATE NOCASE LIMIT 500")
+  if not stmt then return results end
+
+
+  while stmt:step() == 100 do -- SQLITE_ROW
+    local file_path = stmt:get_value(0)
+
+    table.insert(results, {
+      filename = file_path,
+      display = file_path,
+      ordinal = file_path,
     })
   end
+  stmt:finalize()
 
-  return finders.new_table {
-    results = entries,
-    entry_maker = function(entry)
-      return entry
-    end
-  }
-end
-
-local function create_previewer()
-  return previewers.new_buffer_previewer {
-    title = "File Preview (Cached)",
-    get_buffer_by_name = function(_, entry)
-      return entry.value
-    end,
-    define_preview = function(self, entry)
-      if not ensure_unlocked() then
-        vim.api.nvim_buf_set_lines(self.state.bufnr, 0, -1, false, { "Cache is locked" })
-        return
-      end
-
-      local content = get_cached_file(entry.value)
-      if content then
-        local lines = vim.split(content, '\n')
-        vim.api.nvim_buf_set_lines(self.state.bufnr, 0, -1, false, lines)
-
-        -- Set filetype for syntax highlighting
-        local ft = vim.filetype.match({ filename = entry.value })
-        if ft then
-          vim.api.nvim_buf_set_option(self.state.bufnr, 'filetype', ft)
-        end
-      else
-        vim.api.nvim_buf_set_lines(self.state.bufnr, 0, -1, false, { "File not found in cache" })
-      end
-    end
-  }
+  return results
 end
 
 function M.find_files()
@@ -569,9 +520,46 @@ function M.find_files()
 
   pickers.new({}, {
     prompt_title = "Cached Files",
-    finder = create_finder(),
+    finder = finders.new_dynamic {
+      fn = function(prompt)
+        return find_cached_files(prompt)
+      end,
+      entry_maker = function(entry)
+        return {
+          filename = entry.filename,
+          display = entry.display,
+          ordinal = entry.ordinal,
+        }
+      end,
+    },
     sorter = conf.generic_sorter({}),
-    previewer = create_previewer(),
+    previewer = previewers.new_buffer_previewer {
+    title = "File Preview (Cached)",
+    get_buffer_by_name = function(_, entry)
+      return entry.filename
+    end,
+    define_preview = function(self, entry)
+      if not ensure_unlocked() then
+        vim.api.nvim_buf_set_lines(self.state.bufnr, 0, -1, false, { "Cache is locked" })
+        return
+      end
+
+      local content = get_cached_file(entry.filename)
+      if content then
+        local lines = vim.split(content, '\n')
+        vim.api.nvim_buf_set_lines(self.state.bufnr, 0, -1, false, lines)
+
+        -- Set filetype for syntax highlighting
+        local ft = vim.filetype.match({ filename = entry.filename })
+        if ft then
+          vim.api.nvim_buf_set_option(self.state.bufnr, 'filetype', ft)
+        end
+      else
+        vim.api.nvim_buf_set_lines(self.state.bufnr, 0, -1, false, { "File not found in cache" })
+      end
+    end
+  }
+,
     attach_mappings = function(prompt_bufnr, map)
       actions.select_default:replace(function()
         actions.close(prompt_bufnr)
@@ -602,10 +590,15 @@ local function grep_cached_files(prompt)
     return results
   end
 
-  local cached_files = get_all_cached_files()
+  if not db_connection then return results end
 
-  for file_path, _ in pairs(cached_files) do
-    local content = get_cached_file(file_path)
+  local stmt = db_connection:prepare("SELECT file_path, content from cached_files where content like '%" .. prompt .. "%' ORDER BY file_path COLLATE NOCASE LIMIT 500")
+  if not stmt then return results end
+
+
+  while stmt:step() == 100 do -- SQLITE_ROW
+    local file_path = stmt:get_value(0)
+    local content = stmt:get_value(1)
     if content then
       local lines = vim.split(content, '\n')
       for line_num, line in ipairs(lines) do
@@ -626,6 +619,7 @@ local function grep_cached_files(prompt)
       end
     end
   end
+  stmt:finalize()
 
   return results
 end
@@ -652,7 +646,6 @@ function M.live_grep()
       end,
       entry_maker = function(entry)
         return {
-          value = entry,
           display = entry.display,
           ordinal = entry.display,
           filename = entry.filename,
