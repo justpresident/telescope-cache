@@ -497,8 +497,6 @@ local function find_cached_files(prompt)
 
     table.insert(results, {
       filename = file_path,
-      display = file_path,
-      ordinal = file_path,
     })
   end
   stmt:finalize()
@@ -529,44 +527,79 @@ function M.find_files()
       entry_maker = function(entry)
         return {
           filename = entry.filename,
-          display = entry.display,
-          ordinal = entry.ordinal,
+          display = entry.filename,
+          ordinal = entry.filename,
+          value = entry.filename,
         }
       end,
     },
     sorter = conf.generic_sorter({}),
     previewer = previewers.new_buffer_previewer {
-    title = "File Preview (Cached)",
-    get_buffer_by_name = function(_, entry)
-      return entry.filename
-    end,
-    define_preview = function(self, entry)
-      if not ensure_unlocked() then
-        vim.api.nvim_buf_set_lines(self.state.bufnr, 0, -1, false, { "Cache is locked" })
-        return
-      end
-
-      local content = get_cached_file(entry.filename)
-      if content then
-        local lines = vim.split(content, '\n')
-        vim.api.nvim_buf_set_lines(self.state.bufnr, 0, -1, false, lines)
-
-        -- Set filetype for syntax highlighting
-        local ft = vim.filetype.match({ filename = entry.filename })
-        if ft then
-          vim.api.nvim_buf_set_option(self.state.bufnr, 'filetype', ft)
+      title = "File Preview (Cached)",
+      get_buffer_by_name = function(_, entry)
+        return entry.filename
+      end,
+      define_preview = function(self, entry)
+        if not ensure_unlocked() then
+          vim.api.nvim_buf_set_lines(self.state.bufnr, 0, -1, false, { "Cache is locked" })
+          return
         end
-      else
-        vim.api.nvim_buf_set_lines(self.state.bufnr, 0, -1, false, { "File not found in cache" })
+
+        local content = get_cached_file(entry.filename)
+        if content then
+          local lines = vim.split(content, '\n')
+          vim.api.nvim_buf_set_lines(self.state.bufnr, 0, -1, false, lines)
+
+          -- Set filetype for syntax highlighting
+          local ft = vim.filetype.match({ filename = entry.filename })
+          if ft then
+            vim.api.nvim_buf_set_option(self.state.bufnr, 'filetype', ft)
+          end
+        else
+          vim.api.nvim_buf_set_lines(self.state.bufnr, 0, -1, false, { "File not found in cache" })
+        end
       end
-    end
-  }
-,
+    },
     attach_mappings = function(prompt_bufnr, map)
       actions.select_default:replace(function()
         actions.close(prompt_bufnr)
         local selection = action_state.get_selected_entry()
-        vim.cmd('edit ' .. selection.value)
+
+        if not selection or not selection.filename then
+          vim.notify("No file selected", vim.log.levels.WARN)
+          return
+        end
+
+        -- Get cached content
+        local content = get_cached_file(selection.filename)
+        if not content then
+          vim.notify("File not found in cache: " .. selection.filename, vim.log.levels.WARN)
+          return
+        end
+
+        -- Create a new scratch buffer
+        local bufnr = vim.api.nvim_create_buf(false, true)
+
+        -- Set buffer name to indicate it's from cache
+        vim.api.nvim_buf_set_name(bufnr, "[Cache] " .. selection.filename)
+
+        -- Set the cached content
+        local lines = vim.split(content, '\n')
+        vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+
+        -- Make buffer read-only
+        vim.api.nvim_buf_set_option(bufnr, 'modifiable', false)
+        vim.api.nvim_buf_set_option(bufnr, 'readonly', true)
+        vim.api.nvim_buf_set_option(bufnr, 'buftype', 'nofile')
+
+        -- Set filetype for syntax highlighting
+        local ft = vim.filetype.match({ filename = selection.filename })
+        if ft then
+          vim.api.nvim_buf_set_option(bufnr, 'filetype', ft)
+        end
+
+        -- Open the buffer in current window
+        vim.api.nvim_set_current_buf(bufnr)
       end)
 
       -- Add custom mapping to refresh cache
@@ -578,6 +611,7 @@ function M.find_files()
 
       return true
     end,
+
   }):find()
 end
 
@@ -695,16 +729,74 @@ function M.live_grep()
       actions.select_default:replace(function()
         actions.close(prompt_bufnr)
         local selection = action_state.get_selected_entry()
-        if selection and selection.filename then
-          vim.cmd('edit ' .. selection.filename)
-          if selection.lnum then
-            vim.api.nvim_win_set_cursor(0, { selection.lnum, selection.col or 0 })
+
+        if not selection or not selection.filename then
+          vim.notify("No file selected", vim.log.levels.WARN)
+          return
+        end
+
+        -- Get cached content
+        local content = get_cached_file(selection.filename)
+        if not content then
+          vim.notify("File not found in cache: " .. selection.filename, vim.log.levels.WARN)
+          return
+        end
+
+        -- Create a new scratch buffer
+        local bufnr = vim.api.nvim_create_buf(false, true)
+
+        -- Set buffer name
+        vim.api.nvim_buf_set_name(bufnr, "[Cache] " .. selection.filename)
+
+        -- Set the cached content
+        local lines = vim.split(content, '\n')
+        vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+
+        -- Make buffer read-only
+        vim.api.nvim_buf_set_option(bufnr, 'modifiable', false)
+        vim.api.nvim_buf_set_option(bufnr, 'readonly', true)
+        vim.api.nvim_buf_set_option(bufnr, 'buftype', 'nofile')
+
+        -- Set filetype for syntax highlighting
+        local ft = vim.filetype.match({ filename = selection.filename })
+        if ft then
+          vim.api.nvim_buf_set_option(bufnr, 'filetype', ft)
+        end
+
+        -- Open the buffer
+        vim.api.nvim_set_current_buf(bufnr)
+
+        -- Set cursor position to the matched line
+        if selection.lnum then
+          local lnum = selection.lnum
+          local col = (selection.col or 1) - 1  -- Convert to 0-indexed
+
+          -- Validate line number
+          if lnum > #lines then
+            lnum = #lines
           end
+          if lnum < 1 then
+            lnum = 1
+          end
+
+          -- Validate column
+          if col > #lines[lnum] then
+            col = #lines[lnum]
+          end
+          if col < 0 then
+            col = 0
+          end
+
+          -- Set cursor position safely
+          vim.schedule(function()
+            pcall(vim.api.nvim_win_set_cursor, 0, { lnum, col })
+          end)
         end
       end)
 
       return true
     end,
+
   }):find()
 end
 
