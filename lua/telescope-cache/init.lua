@@ -378,6 +378,166 @@ local function update_cache_entry(file_path)
   return false
 end
 
+local function open_cached_buffer(filename, lnum, col, open_cmd)
+  -- Get cached content
+  local content = get_cached_file(filename)
+  if not content then
+    vim.notify("File not found in cache: " .. filename, vim.log.levels.WARN)
+    return
+  end
+
+  -- Split content into lines (needed for both new and existing buffers)
+  local lines = vim.split(content, '\n')
+
+  -- Check if buffer already exists with this name
+  local cache_name = "[Cache] " .. filename
+  local existing_bufnr = vim.fn.bufnr(cache_name)
+
+  local bufnr
+  if existing_bufnr ~= -1 then
+    -- Reuse existing buffer
+    bufnr = existing_bufnr
+  else
+    -- Create a new buffer (listed so it appears in buffer list)
+    bufnr = vim.api.nvim_create_buf(true, false)  -- listed=true, scratch=false
+
+    -- Set the cached content BEFORE setting the name
+    vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+
+    -- Set buffer name to indicate it's from cache
+    vim.api.nvim_buf_set_name(bufnr, cache_name)
+
+    -- Set filetype for syntax highlighting
+    local ft = vim.filetype.match({ filename = filename })
+    if ft then
+      vim.api.nvim_buf_set_option(bufnr, 'filetype', ft)
+    end
+
+    -- Set buffer options
+    vim.api.nvim_buf_set_option(bufnr, 'buflisted', true)
+    vim.api.nvim_buf_set_option(bufnr, 'bufhidden', 'hide')
+    vim.api.nvim_buf_set_option(bufnr, 'buftype', 'nofile')
+
+    -- Make buffer read-only AFTER setting content
+    vim.api.nvim_buf_set_option(bufnr, 'modifiable', false)
+    vim.api.nvim_buf_set_option(bufnr, 'readonly', true)
+  end
+
+  -- Open in the appropriate window/tab/split
+  if open_cmd == 'tabnew' then
+    vim.cmd('tabnew')
+    local empty_buf = vim.api.nvim_get_current_buf()
+    vim.api.nvim_set_current_buf(bufnr)
+    vim.api.nvim_buf_delete(empty_buf, { force = true })
+  elseif open_cmd == 'split' then
+    vim.cmd('split')
+    vim.api.nvim_set_current_buf(bufnr)
+  elseif open_cmd == 'vsplit' then
+    vim.cmd('vsplit')
+    vim.api.nvim_set_current_buf(bufnr)
+  else
+    -- Open in current window
+    vim.api.nvim_set_current_buf(bufnr)
+  end
+
+  -- Set cursor position if provided
+  if lnum then
+    local safe_lnum = math.max(1, math.min(lnum, #lines))
+    local safe_col = 0
+
+    if col then
+      safe_col = math.max(0, math.min((col - 1), #lines[safe_lnum]))
+    end
+
+    -- Set cursor position safely
+    vim.schedule(function()
+      pcall(vim.api.nvim_win_set_cursor, 0, { safe_lnum, safe_col })
+    end)
+  end
+end
+
+-- Helper function to create attach_mappings for cached file pickers
+-- This eliminates code duplication between find_files and live_grep
+local function create_cached_attach_mappings(with_position)
+  return function(prompt_bufnr, map)
+    -- Helper to get position if needed
+    local function get_position(selection)
+      if with_position and selection then
+        return selection.lnum, selection.col
+      end
+      return nil, nil
+    end
+
+    -- Default action (Enter)
+    actions.select_default:replace(function()
+      local selection = action_state.get_selected_entry()
+      actions.close(prompt_bufnr)
+
+      if not selection or not selection.filename then
+        vim.notify("No file selected", vim.log.levels.WARN)
+        return
+      end
+
+      local lnum, col = get_position(selection)
+      open_cached_buffer(selection.filename, lnum, col)
+    end)
+
+    -- Open in new tab (Ctrl+t)
+    actions.select_tab:replace(function()
+      local selection = action_state.get_selected_entry()
+      actions.close(prompt_bufnr)
+
+      if not selection or not selection.filename then
+        vim.notify("No file selected", vim.log.levels.WARN)
+        return
+      end
+
+      local lnum, col = get_position(selection)
+      open_cached_buffer(selection.filename, lnum, col, 'tabnew')
+    end)
+
+    -- Open in horizontal split (Ctrl+x)
+    actions.select_horizontal:replace(function()
+      local selection = action_state.get_selected_entry()
+      actions.close(prompt_bufnr)
+
+      if not selection or not selection.filename then
+        vim.notify("No file selected", vim.log.levels.WARN)
+        return
+      end
+
+      local lnum, col = get_position(selection)
+      open_cached_buffer(selection.filename, lnum, col, 'split')
+    end)
+
+    -- Open in vertical split (Ctrl+v)
+    actions.select_vertical:replace(function()
+      local selection = action_state.get_selected_entry()
+      actions.close(prompt_bufnr)
+
+      if not selection or not selection.filename then
+        vim.notify("No file selected", vim.log.levels.WARN)
+        return
+      end
+
+      local lnum, col = get_position(selection)
+      open_cached_buffer(selection.filename, lnum, col, 'vsplit')
+    end)
+
+    -- Custom mapping to refresh cache (only for find_files)
+    if not with_position then
+      map('i', '<C-r>', function()
+        actions.close(prompt_bufnr)
+        M.refresh_cache()
+        M.find_files()
+      end)
+    end
+
+    return true
+  end
+end
+
+
 -- Main cache functions
 function M.refresh_cache()
   if not ensure_unlocked() then
@@ -560,58 +720,7 @@ function M.find_files()
         end
       end
     },
-    attach_mappings = function(prompt_bufnr, map)
-      actions.select_default:replace(function()
-        actions.close(prompt_bufnr)
-        local selection = action_state.get_selected_entry()
-
-        if not selection or not selection.filename then
-          vim.notify("No file selected", vim.log.levels.WARN)
-          return
-        end
-
-        -- Get cached content
-        local content = get_cached_file(selection.filename)
-        if not content then
-          vim.notify("File not found in cache: " .. selection.filename, vim.log.levels.WARN)
-          return
-        end
-
-        -- Create a new scratch buffer
-        local bufnr = vim.api.nvim_create_buf(false, true)
-
-        -- Set buffer name to indicate it's from cache
-        vim.api.nvim_buf_set_name(bufnr, "[Cache] " .. selection.filename)
-
-        -- Set the cached content
-        local lines = vim.split(content, '\n')
-        vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
-
-        -- Make buffer read-only
-        vim.api.nvim_buf_set_option(bufnr, 'modifiable', false)
-        vim.api.nvim_buf_set_option(bufnr, 'readonly', true)
-        vim.api.nvim_buf_set_option(bufnr, 'buftype', 'nofile')
-
-        -- Set filetype for syntax highlighting
-        local ft = vim.filetype.match({ filename = selection.filename })
-        if ft then
-          vim.api.nvim_buf_set_option(bufnr, 'filetype', ft)
-        end
-
-        -- Open the buffer in current window
-        vim.api.nvim_set_current_buf(bufnr)
-      end)
-
-      -- Add custom mapping to refresh cache
-      map('i', '<C-r>', function()
-        actions.close(prompt_bufnr)
-        M.refresh_cache()
-        M.find_files()
-      end)
-
-      return true
-    end,
-
+    attach_mappings = create_cached_attach_mappings(false),
   }):find()
 end
 
@@ -725,78 +834,7 @@ function M.live_grep()
         end
       end
     },
-    attach_mappings = function(prompt_bufnr, map)
-      actions.select_default:replace(function()
-        actions.close(prompt_bufnr)
-        local selection = action_state.get_selected_entry()
-
-        if not selection or not selection.filename then
-          vim.notify("No file selected", vim.log.levels.WARN)
-          return
-        end
-
-        -- Get cached content
-        local content = get_cached_file(selection.filename)
-        if not content then
-          vim.notify("File not found in cache: " .. selection.filename, vim.log.levels.WARN)
-          return
-        end
-
-        -- Create a new scratch buffer
-        local bufnr = vim.api.nvim_create_buf(false, true)
-
-        -- Set buffer name
-        vim.api.nvim_buf_set_name(bufnr, "[Cache] " .. selection.filename)
-
-        -- Set the cached content
-        local lines = vim.split(content, '\n')
-        vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
-
-        -- Make buffer read-only
-        vim.api.nvim_buf_set_option(bufnr, 'modifiable', false)
-        vim.api.nvim_buf_set_option(bufnr, 'readonly', true)
-        vim.api.nvim_buf_set_option(bufnr, 'buftype', 'nofile')
-
-        -- Set filetype for syntax highlighting
-        local ft = vim.filetype.match({ filename = selection.filename })
-        if ft then
-          vim.api.nvim_buf_set_option(bufnr, 'filetype', ft)
-        end
-
-        -- Open the buffer
-        vim.api.nvim_set_current_buf(bufnr)
-
-        -- Set cursor position to the matched line
-        if selection.lnum then
-          local lnum = selection.lnum
-          local col = (selection.col or 1) - 1  -- Convert to 0-indexed
-
-          -- Validate line number
-          if lnum > #lines then
-            lnum = #lines
-          end
-          if lnum < 1 then
-            lnum = 1
-          end
-
-          -- Validate column
-          if col > #lines[lnum] then
-            col = #lines[lnum]
-          end
-          if col < 0 then
-            col = 0
-          end
-
-          -- Set cursor position safely
-          vim.schedule(function()
-            pcall(vim.api.nvim_win_set_cursor, 0, { lnum, col })
-          end)
-        end
-      end)
-
-      return true
-    end,
-
+    attach_mappings = create_cached_attach_mappings(true),
   }):find()
 end
 
