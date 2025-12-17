@@ -1,3 +1,4 @@
+![CI](https://github.com/justpresident/telescope-cache/actions/workflows/tests.yml/badge.svg)
 # telescope-cache.nvim
 
 An extension for Neovim Telescope plugin that provides persistent caching for specified directories. The main use case is caching files from slow filesystems and for offline work on files from remote filesystems.
