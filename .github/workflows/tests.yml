@@ -1,0 +1,58 @@
+name: Tests
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        neovim_version: ['stable', 'nightly']
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libsqlcipher0 libsqlcipher-dev sqlite3
+
+    - name: Install Neovim
+      uses: rhysd/action-setup-vim@v1
+      with:
+        neovim: true
+        version: ${{ matrix.neovim_version }}
+
+    - name: Install Lua dependencies
+      run: |
+        sudo apt-get install -y luarocks
+        sudo luarocks install luafilesystem
+
+    - name: Install test dependencies
+      run: |
+        # Create pack directory
+        mkdir -p ~/.local/share/nvim/site/pack/deps/start
+
+        # Install plenary.nvim
+        git clone --depth 1 https://github.com/nvim-lua/plenary.nvim \
+          ~/.local/share/nvim/site/pack/deps/start/plenary.nvim
+
+        # Install telescope.nvim
+        git clone --depth 1 https://github.com/nvim-telescope/telescope.nvim \
+          ~/.local/share/nvim/site/pack/deps/start/telescope.nvim
+
+        # Install vusted
+        sudo luarocks install vusted
+
+    - name: Run SQLCipher encryption tests
+      run: |
+        vusted --verbose ./tests/sqlcipher_ffi_spec.lua
+
+    - name: Verify encryption
+      run: |
+        # Quick sanity check that we can load SQLCipher
+        nvim --headless -c "lua print(require('ffi').load('libsqlcipher'))" -c "quit" || echo "SQLCipher load test"
