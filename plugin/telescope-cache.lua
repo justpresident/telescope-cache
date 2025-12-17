@@ -49,3 +49,7 @@ vim.api.nvim_create_user_command('TelescopeCacheStatus', function()
   local is_locked = require('telescope').extensions.cache.is_cache_locked()
   print("Cache status: " .. (is_locked and "Locked" or "Unlocked"))
 end, { desc = 'Check cache lock status' })
+
+vim.api.nvim_create_user_command('TelescopeCacheDebug', function()
+  require('telescope').extensions.cache.print_config()
+end, { desc = 'Print cache configuration for debugging' })

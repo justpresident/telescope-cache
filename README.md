@@ -30,8 +30,7 @@ require('telescope').setup({
       max_file_size = 1024 * 1024,
       auto_refresh = true,
       refresh_interval = 3600,
-      -- Encryption settings
-      use_encryption = true,
+      -- Encryption settings (database is always encrypted)
       password_prompt = true, -- Prompt for password on first use
       session_timeout = 3600, -- 1 hour - auto-lock after inactivity
     }
@@ -47,18 +46,24 @@ vim.keymap.set('n', '<leader>scr', '<cmd>TelescopeCacheRefresh<cr>', { desc = '[
 
 ## Dependencies
 
-The plugin requires lua sqlite library to be installed. 
+The plugin requires SQLCipher (SQLite with encryption) to be installed.
 
-#### On Ubuntu:
+#### On Ubuntu/Debian:
+```bash
+sudo apt install libsqlcipher0
 ```
-sudo apt install libsqlite3-dev luarocks
-sudo luarocks install lsqlite3
-```
+
 #### On Fedora:
+```bash
+sudo dnf install sqlcipher-libs
 ```
-sudo dnf install luarocks sqlite-devel
-sudo luarocks install lsqlite3
+
+#### On Arch Linux:
+```bash
+sudo pacman -S sqlcipher
 ```
+
+**Note:** libsqlcipher must be discoverable by the dynamic loader. You can verify with: `ldconfig -p | grep sqlcipher`
 
 ## Usage
 
@@ -73,13 +78,58 @@ Following commands are available:
 - **TelescopeCacheLock**: Lock the cache if it is unlocked. It will require entering a password again to access it
 - **TelescopeCacheStatus**: Prints cache status: Locked or Unlocked
 
+## Security & Threat Model
+
+### What's Protected
+- ✅ Database file content (page-level AES-256 encryption via SQLCipher)
+- ✅ WAL and journal files (also encrypted)
+- ✅ Schema, indices, and all data
+- ✅ Protection against disk theft, backups, unauthorized file access
+
+### What's NOT Protected
+- ❌ Database file size (visible on disk)
+- ❌ Password in process memory (accessible to other plugins with FFI access)
+- ❌ Timing attacks or access pattern analysis
+- ❌ Attackers with root/debugger access to the running process
+
+### Verification
+
+To verify encryption is working:
+
+```bash
+# This should show random bytes, NOT "SQLite format 3"
+hexdump -C ~/.cache/nvim/telescope-cache/cache.db | head
+
+# This should fail with "file is not a database" or "file is encrypted"
+sqlite3 ~/.cache/nvim/telescope-cache/cache.db "SELECT * FROM cached_files;"
+```
+
+If you see "SQLite format 3" in the hexdump or if sqlite3 can read the database, encryption is not working properly.
+
 ## Troubleshooting
 
-If `require sqlite` command fails, it might be that sqlite is installed either for wrong version of lua that Neovim uses or into a folder that neovim doesn't know about.
+### libsqlcipher not found
 
-- You can specify lua version in the install command: `sudo luarocks install --lua-version 5.1 lsqlite3`
+If you see "SQLCipher FFI module failed to load":
+- Ensure libsqlcipher is installed (see Dependencies section above)
+- Verify library is in loader path: `ldconfig -p | grep sqlcipher`
+- Check library name: you might need to create a symlink if the version differs from expected names
 
-- You might need to link installed library to the place that Neovim knows about, like: `sudo ln -s /usr/lib64/lua/5.1/lsqlite3.so /usr/local/lib/lua/5.1/`
+Example symlink if needed:
+```bash
+sudo ln -s /usr/lib/x86_64-linux-gnu/libsqlcipher.so.1 /usr/lib/x86_64-linux-gnu/libsqlcipher.so.0
+```
+
+### Wrong password
+
+The database will fail to open with "file is not a database" error if:
+- The password is incorrect
+- The database is corrupted
+- You're trying to open a plaintext SQLite database with SQLCipher (delete the old database and refresh)
+
+### Performance
+
+SQLCipher adds minimal overhead (~5-10% typically). The database is always encrypted to ensure security of cached data.
 
 ## Contributing
 

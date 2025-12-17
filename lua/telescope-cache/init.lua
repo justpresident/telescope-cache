@@ -31,8 +31,7 @@ local default_config = {
   max_file_size = 1024 * 1024, -- 1MB
   auto_refresh = true,
   refresh_interval = 300,      -- 5 minutes
-  -- Encryption settings
-  use_encryption = true,
+  -- Encryption settings (database is always encrypted)
   password_prompt = true, -- Prompt for password on first use
   session_timeout = 3600, -- 1 hour - auto-lock after inactivity
 }
@@ -44,15 +43,6 @@ local last_activity = 0
 local is_unlocked = false
 
 -- Password and encryption utilities
-local function hash_password(password)
-  -- Simple hash for key derivation - in production, use a proper KDF
-  local hash = 0
-  for i = 1, #password do
-    hash = (hash * 31 + string.byte(password, i)) % 2147483647
-  end
-  return tostring(hash)
-end
-
 local function prompt_password(confirm)
   local password
   if confirm then
@@ -101,47 +91,20 @@ end
 
 -- Database operations
 local function init_database()
-  if not config.use_encryption then
-    -- Use regular SQLite without encryption
-    local sqlite_available, sqlite = pcall(require, 'sqlite')
-    if not sqlite_available then
-      print("Error: lua-sqlite3 not available. Install with your package manager.")
-      return false
-    end
+  -- Always use SQLCipher for encryption via FFI
+  local sqlite_available, sqlcipher = pcall(require, 'telescope-cache.sqlcipher_ffi')
+  if not sqlite_available then
+    vim.notify("SQLCipher FFI module failed to load. Install libsqlcipher: sudo apt install libsqlcipher0", vim.log.levels.ERROR)
+    return false
+  end
 
-    local db_path = get_db_path()
-    db_connection = sqlite.open(db_path)
+  local db_path = get_db_path()
+  local err
+  db_connection, err = sqlcipher.open(db_path, db_password)
 
-    if not db_connection then
-      print("Error: Could not open database")
-      return false
-    end
-  else
-    -- Try to use SQLCipher for encryption
-    local sqlite_available, sqlite = pcall(require, 'lsqlite3')
-    if not sqlite_available then
-      print("Error: lsqlite3 not available. Install with: luarocks install --lua-version 5.1 lsqlite3:", sqlite)
-      return false
-    end
-
-    local db_path = get_db_path()
-    db_connection = sqlite.open(db_path)
-
-    if not db_connection then
-      print("Error: Could not open database")
-      return false
-    end
-
-    -- Set encryption key if password is provided
-    if db_password then
-      local pragma_result = db_connection:exec("PRAGMA key = '" .. db_password .. "';")
-      if pragma_result ~= sqlite.OK then
-        print("Error: Could not set encryption key")
-        db_connection:close()
-        db_connection = nil
-        return false
-      end
-    end
+  if not db_connection then
+    vim.notify("Failed to open database: " .. tostring(err), vim.log.levels.ERROR)
+    return false
   end
 
   -- Create tables
@@ -180,11 +143,6 @@ local function init_database()
 end
 
 function M.unlock_cache()
-  if not config.use_encryption then
-    is_unlocked = true
-    return init_database()
-  end
-
   local db_path = get_db_path()
   local db_exists = Path:new(db_path):exists()
 
@@ -218,13 +176,18 @@ function M.lock_cache()
     db_connection:close()
     db_connection = nil
   end
-  db_password = nil
+  -- Overwrite password in memory before clearing
+  if db_password then
+    db_password = string.rep('\0', #db_password)
+    db_password = nil
+  end
   is_unlocked = false
+  collectgarbage("collect")
   print("Cache locked")
 end
 
 function M.is_cache_locked()
-  return config.use_encryption and not is_unlocked
+  return not is_unlocked
 end
 
 local function ensure_unlocked()
@@ -240,25 +203,36 @@ end
 
 -- File operations with database
 local function should_cache_file(file_path)
+  local debug = true  -- Enable debug output
+
   -- Check file size
   local stat = uv.fs_stat(file_path)
-  if not stat or stat.size > config.max_file_size then
+  if not stat then
+    if debug then print(string.format("  [DEBUG]     -> No stat for file")) end
+    return false
+  end
+  if stat.size > config.max_file_size then
+    if debug then print(string.format("  [DEBUG]     -> File too large: %d > %d", stat.size, config.max_file_size)) end
     return false
   end
 
   -- Check if file matches any of the configured allow_patterns
-  for _, pattern in ipairs(config.allow_patterns) do
+  for i, pattern in ipairs(config.allow_patterns) do
     if file_path:match(pattern) then
+      if debug then print(string.format("  [DEBUG]     -> Matched pattern [%d]: %s", i, pattern)) end
       return true
     end
   end
 
+  if debug then print(string.format("  [DEBUG]     -> No pattern matched")) end
   return false
 end
 
 local function should_ignore_path(path)
-  for _, pattern in ipairs(config.ignore_patterns) do
+  local debug = true  -- Enable debug output
+  for i, pattern in ipairs(config.ignore_patterns) do
     if path:match(pattern) then
+      if debug then print(string.format("  [DEBUG]     -> Matched ignore pattern [%d]: '%s'", i, pattern)) end
       return true
     end
   end
@@ -267,10 +241,14 @@ end
 
 local function scan_directory(directory)
   local files = {}
+  local debug = true  -- Enable debug output
 
   local function scan_recursive(dir)
     local handle = uv.fs_scandir(dir)
-    if not handle then return end
+    if not handle then
+      if debug then print(string.format("  [DEBUG] Failed to scan: %s", dir)) end
+      return
+    end
 
     while true do
       local name, type = uv.fs_scandir_next(handle)
@@ -278,14 +256,26 @@ local function scan_directory(directory)
 
       local full_path = dir .. '/' .. name
 
+      if debug then
+        print(string.format("  [DEBUG] Found: %s (type: %s)", full_path, type))
+      end
+
       if should_ignore_path(full_path) then
+        if debug then print(string.format("  [DEBUG]   -> Ignored by pattern")) end
         goto continue
       end
 
       if type == 'directory' then
+        if debug then print(string.format("  [DEBUG]   -> Scanning subdirectory")) end
         scan_recursive(full_path)
-      elseif type == 'file' and should_cache_file(full_path) then
-        table.insert(files, full_path)
+      elseif type == 'file' then
+        local should_cache = should_cache_file(full_path)
+        if debug then
+          print(string.format("  [DEBUG]   -> File, should_cache: %s", tostring(should_cache)))
+        end
+        if should_cache then
+          table.insert(files, full_path)
+        end
       end
 
       ::continue::
@@ -548,11 +538,18 @@ function M.refresh_cache()
   ensure_cache_dir()
 
   print("Refreshing cache...")
+  print(string.format("Configured directories: %d", #config.directories))
+  for i, dir in ipairs(config.directories) do
+    print(string.format("  [%d] %s", i, dir))
+  end
+
   local total_files = 0
   local updated_files = 0
 
   for _, directory in ipairs(config.directories) do
+    print(string.format("Scanning directory: %s", directory))
     local files = scan_directory(directory)
+    print(string.format("  Found %d files", #files))
     total_files = total_files + #files
 
     for _, file_path in ipairs(files) do
@@ -853,10 +850,22 @@ function M.setup(opts)
   end
 
   ensure_cache_dir()
+end
 
-  -- Auto-unlock on startup if not using encryption
-  if not config.use_encryption then
-    M.unlock_cache()
+-- Debug function to print config
+function M.print_config()
+  print("=== Cache Configuration ===")
+  print("Directories:")
+  for i, dir in ipairs(config.directories) do
+    print(string.format("  [%d] %s", i, dir))
+  end
+  print("\nAllow patterns:")
+  for i, pattern in ipairs(config.allow_patterns) do
+    print(string.format("  [%d] '%s'", i, pattern))
+  end
+  print("\nIgnore patterns:")
+  for i, pattern in ipairs(config.ignore_patterns) do
+    print(string.format("  [%d] '%s'", i, pattern))
   end
 end
 
@@ -876,6 +885,7 @@ local function register_extension()
       unlock_cache = M.unlock_cache,
       lock_cache = M.lock_cache,
       is_cache_locked = M.is_cache_locked,
+      print_config = M.print_config,
     }
   }
 end
