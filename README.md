@@ -131,9 +131,65 @@ The database will fail to open with "file is not a database" error if:
 
 SQLCipher adds minimal overhead (~5-10% typically). The database is always encrypted to ensure security of cached data.
 
+## Testing
+
+This plugin includes automated tests to ensure encryption and caching functionality work correctly.
+
+### Running Tests Locally
+
+1. **Install test dependencies:**
+   ```bash
+   make install-deps
+   ```
+
+2. **Run all tests:**
+   ```bash
+   make test
+   ```
+
+3. **Run specific test file:**
+   ```bash
+   make test-file FILE=sqlcipher_ffi_spec.lua
+   ```
+
+4. **Verify SQLCipher installation:**
+   ```bash
+   make check-sqlcipher
+   ```
+
+5. **Quick smoke test:**
+   ```bash
+   make smoke
+   ```
+
+### Test Structure
+
+```
+tests/
+├── minimal_init.lua           # Minimal Neovim config for tests
+├── sqlcipher_ffi_spec.lua     # Tests for SQLCipher FFI module
+└── cache_plugin_spec.lua      # Integration tests for caching
+```
+
+### GitHub Actions
+
+Tests run automatically on push and pull requests via GitHub Actions. The workflow:
+- Tests on both Neovim stable and nightly
+- Installs libsqlcipher0
+- Runs the full test suite
+- Verifies encryption is working
+
+See `.github/workflows/test.yml` for details.
+
 ## Contributing
 
 Contributions are welcome! Please feel free to submit issues, feature requests, or pull requests.
+
+When contributing:
+- Add tests for new features
+- Ensure existing tests pass: `make test`
+- Follow the existing code style
+- Update documentation as needed
 
 
 ## Acknowledgments

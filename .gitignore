@@ -1,0 +1,24 @@
+# Test artifacts
+*.db
+*.db-wal
+*.db-shm
+/tmp/
+
+# Lua
+luac.out
+
+# macOS
+.DS_Store
+
+# Editor
+*.swp
+*.swo
+*~
+.*.sw?
+
+# Testing
+.luacov
+luacov.*.out
+
+# Cache
+.cache/
