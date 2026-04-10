@@ -32,8 +32,8 @@ local default_config = {
   auto_refresh = true,
   refresh_interval = 300,      -- 5 minutes
   -- Encryption settings (database is always encrypted)
-  password_prompt = true, -- Prompt for password on first use
-  session_timeout = 3600, -- 1 hour - auto-lock after inactivity
+  password_prompt = true,      -- Prompt for password on first use
+  session_timeout = 3600,      -- 1 hour - auto-lock after inactivity
 }
 
 local config = vim.tbl_deep_extend('force', {}, default_config)
@@ -94,7 +94,8 @@ local function init_database()
   -- Always use SQLCipher for encryption via FFI
   local sqlite_available, sqlcipher = pcall(require, 'telescope-cache.sqlcipher_ffi')
   if not sqlite_available then
-    vim.notify("SQLCipher FFI module failed to load. Install libsqlcipher: sudo apt install libsqlcipher0", vim.log.levels.ERROR)
+    vim.notify("SQLCipher FFI module failed to load. Install libsqlcipher: sudo apt install libsqlcipher0",
+      vim.log.levels.ERROR)
     return false
   end
 
@@ -203,7 +204,7 @@ end
 
 -- File operations with database
 local function should_cache_file(file_path)
-  local debug = true  -- Enable debug output
+  local debug = false -- Enable debug output
 
   -- Check file size
   local stat = uv.fs_stat(file_path)
@@ -229,7 +230,7 @@ local function should_cache_file(file_path)
 end
 
 local function should_ignore_path(path)
-  local debug = true  -- Enable debug output
+  local debug = false -- Enable debug output
   for i, pattern in ipairs(config.ignore_patterns) do
     if path:match(pattern) then
       if debug then print(string.format("  [DEBUG]     -> Matched ignore pattern [%d]: '%s'", i, pattern)) end
@@ -241,7 +242,7 @@ end
 
 local function scan_directory(directory)
   local files = {}
-  local debug = true  -- Enable debug output
+  local debug = false -- Enable debug output
 
   local function scan_recursive(dir)
     local handle = uv.fs_scandir(dir)
@@ -389,7 +390,7 @@ local function open_cached_buffer(filename, lnum, col, open_cmd)
     bufnr = existing_bufnr
   else
     -- Create a new buffer (listed so it appears in buffer list)
-    bufnr = vim.api.nvim_create_buf(true, false)  -- listed=true, scratch=false
+    bufnr = vim.api.nvim_create_buf(true, false) -- listed=true, scratch=false
 
     -- Set the cached content BEFORE setting the name
     vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
@@ -645,7 +646,8 @@ local function find_cached_files(prompt)
 
   if not db_connection then return results end
 
-  local stmt = db_connection:prepare("SELECT file_path from cached_files where file_path like '%" .. prompt .. "%' ORDER BY file_path COLLATE NOCASE LIMIT 500")
+  local stmt = db_connection:prepare("SELECT file_path from cached_files where file_path like '%" ..
+    prompt .. "%' ORDER BY file_path COLLATE NOCASE LIMIT 500")
   if not stmt then return results end
 
 
@@ -734,7 +736,8 @@ local function grep_cached_files(prompt)
 
   if not db_connection then return results end
 
-  local stmt = db_connection:prepare("SELECT file_path, content from cached_files where content like '%" .. prompt .. "%' ORDER BY file_path COLLATE NOCASE LIMIT 500")
+  local stmt = db_connection:prepare("SELECT file_path, content from cached_files where content like '%" ..
+    prompt .. "%' ORDER BY file_path COLLATE NOCASE LIMIT 500")
   if not stmt then return results end
 
 
