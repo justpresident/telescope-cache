@@ -52,6 +52,10 @@ jobs:
       run: |
         vusted --verbose ./tests/sqlcipher_ffi_spec.lua
 
+    - name: Run integration tests
+      run: |
+        vusted --verbose ./tests/cache_plugin_spec.lua
+
     - name: Verify encryption
       run: |
         # Quick sanity check that we can load SQLCipher

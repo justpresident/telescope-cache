@@ -1,19 +1,45 @@
 -- tests/minimal_init.lua
--- Minimal Neovim configuration for running tests
+-- Minimal Neovim configuration for running tests.
+--
+-- vusted can redirect XDG paths to a sandboxed temp dir, which makes
+-- stdpath('data') unreliable for locating manually-installed plugins.
+-- Probe several candidate locations and explicitly extend package.path
+-- so require() works even if rtp->package.path sync has not run.
 
--- Add plugin to runtimepath
 vim.opt.runtimepath:append('.')
 
-local data_dir = vim.fn.stdpath('data')
-local pack_dir = data_dir .. '/site/pack/deps/start'
+local function dir_exists(path)
+  return vim.fn.isdirectory(path) == 1
+end
 
--- Add plenary for testing framework and as Telescope dependency
-local plenary_path = pack_dir .. '/plenary.nvim'
-vim.opt.runtimepath:append(plenary_path)
+local function find_plugin(name)
+  local home = vim.env.HOME or os.getenv('HOME') or ''
+  local candidates = {
+    vim.fn.stdpath('data') .. '/site/pack/deps/start/' .. name,
+    home .. '/.local/share/nvim/site/pack/deps/start/' .. name,
+    '/opt/nvim-plugins/' .. name,
+  }
+  for _, path in ipairs(candidates) do
+    if dir_exists(path) then
+      return path
+    end
+  end
+  return nil
+end
 
--- Add telescope
-local telescope_path = pack_dir .. '/telescope.nvim'
-vim.opt.runtimepath:append(telescope_path)
+local function add_plugin(name)
+  local path = find_plugin(name)
+  if not path then
+    return
+  end
+  vim.opt.runtimepath:append(path)
+  package.path = package.path
+    .. ';' .. path .. '/lua/?.lua'
+    .. ';' .. path .. '/lua/?/init.lua'
+end
+
+add_plugin('plenary.nvim')
+add_plugin('telescope.nvim')
 
 -- Disable swap files and other stuff that might interfere with tests
 vim.opt.swapfile = false

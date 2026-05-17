@@ -1,4 +1,7 @@
-.PHONY: test test-watch install-deps clean
+.PHONY: test test-watch install-deps clean docker-build docker-test docker-test-all docker-shell
+
+DOCKER_IMAGE ?= telescope-cache-tests
+DOCKER_RUN = docker run --rm -v "$(CURDIR):/workspace" $(DOCKER_IMAGE)
 
 # Run all tests (SQLCipher FFI only - integration tests need telescope setup)
 test:
@@ -65,3 +68,19 @@ smoke:
 		-c "lua assert(require('telescope-cache.sqlcipher_ffi'), 'SQLCipher FFI failed to load')" \
 		-c "lua print('✓ SQLCipher FFI loaded successfully')" \
 		-c "quit"
+
+# Build the test container (includes nvim, libsqlcipher, plenary, telescope, vusted)
+docker-build:
+	docker build -t $(DOCKER_IMAGE) .
+
+# Run the default test target inside the container
+docker-test: docker-build
+	$(DOCKER_RUN) make test
+
+# Run the full integration suite inside the container
+docker-test-all: docker-build
+	$(DOCKER_RUN) make test-all
+
+# Drop into an interactive shell in the container with the repo mounted
+docker-shell: docker-build
+	docker run --rm -it -v "$(CURDIR):/workspace" $(DOCKER_IMAGE) bash

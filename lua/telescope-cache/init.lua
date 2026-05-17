@@ -143,15 +143,20 @@ local function init_database()
   return true
 end
 
-function M.unlock_cache()
-  local db_path = get_db_path()
-  local db_exists = Path:new(db_path):exists()
+function M.unlock_cache(password)
+  if password and password ~= "" then
+    -- Caller supplied the password directly (programmatic / test use).
+    db_password = password
+  else
+    local db_path = get_db_path()
+    local db_exists = Path:new(db_path):exists()
 
-  if not db_exists and config.password_prompt then
-    print("Creating new encrypted cache database...")
-    db_password = prompt_password(true)  -- Confirm password for new database
-  elseif config.password_prompt then
-    db_password = prompt_password(false) -- Enter existing password
+    if not db_exists and config.password_prompt then
+      print("Creating new encrypted cache database...")
+      db_password = prompt_password(true)  -- Confirm password for new database
+    elseif config.password_prompt then
+      db_password = prompt_password(false) -- Enter existing password
+    end
   end
 
   if not db_password then
@@ -447,6 +452,100 @@ local function open_cached_buffer(filename, lnum, col, open_cmd)
   end
 end
 
+-- Helpers for path-remapped extraction
+local function strip_trailing_slash(s)
+  while #s > 1 and s:sub(-1) == "/" do
+    s = s:sub(1, -2)
+  end
+  return s
+end
+
+local function compute_common_prefix(paths)
+  if #paths == 0 then return "" end
+  if #paths == 1 then
+    return paths[1]:match("(.*/)") or ""
+  end
+
+  local first = paths[1]
+  local prefix_len = #first
+  for i = 2, #paths do
+    local p = paths[i]
+    local max = math.min(prefix_len, #p)
+    local j = 0
+    while j < max and first:byte(j + 1) == p:byte(j + 1) do
+      j = j + 1
+    end
+    prefix_len = j
+    if prefix_len == 0 then break end
+  end
+
+  local prefix = first:sub(1, prefix_len)
+  return prefix:match("^(.*/)") or ""
+end
+
+local function query_cached_paths(filter)
+  local paths = {}
+  if not db_connection then return paths end
+
+  local stmt
+  if filter and filter ~= "" then
+    stmt = db_connection:prepare("SELECT file_path FROM cached_files WHERE file_path LIKE ? ORDER BY file_path")
+    if not stmt then return paths end
+    stmt:bind(1, "%" .. filter .. "%")
+  else
+    stmt = db_connection:prepare("SELECT file_path FROM cached_files ORDER BY file_path")
+    if not stmt then return paths end
+  end
+
+  while stmt:step() == 100 do
+    table.insert(paths, stmt:get_value(0))
+  end
+  stmt:finalize()
+  return paths
+end
+
+local function extract_via_picker(prompt_bufnr)
+  if not ensure_unlocked() then return end
+
+  local current_prompt = action_state.get_current_line() or ""
+  local paths = query_cached_paths(current_prompt)
+  if #paths == 0 then
+    vim.notify("No cached files match the current filter", vim.log.levels.WARN)
+    return
+  end
+
+  local computed = compute_common_prefix(paths)
+  actions.close(prompt_bufnr)
+
+  vim.schedule(function()
+    print(string.format("Extracting %d cached file(s) matching '%s'", #paths, current_prompt))
+    local CANCEL = "\0"
+
+    local from_prefix = vim.fn.input({
+      prompt = "From prefix: ",
+      default = computed,
+      cancelreturn = CANCEL,
+    })
+    if from_prefix == CANCEL or from_prefix == "" then
+      print("Extract cancelled")
+      return
+    end
+
+    local to_prefix = vim.fn.input({
+      prompt = "To prefix: ",
+      default = vim.fn.getcwd() .. "/",
+      completion = "dir",
+      cancelreturn = CANCEL,
+    })
+    if to_prefix == CANCEL or to_prefix == "" then
+      print("Extract cancelled")
+      return
+    end
+
+    M.extract(from_prefix, to_prefix, current_prompt)
+  end)
+end
+
 -- Helper function to create attach_mappings for cached file pickers
 -- This eliminates code duplication between find_files and live_grep
 local function create_cached_attach_mappings(with_position)
@@ -515,12 +614,16 @@ local function create_cached_attach_mappings(with_position)
       open_cached_buffer(selection.filename, lnum, col, 'vsplit')
     end)
 
-    -- Custom mapping to refresh cache (only for find_files)
+    -- Custom mappings (only for find_files)
     if not with_position then
       map('i', '<C-r>', function()
         actions.close(prompt_bufnr)
         M.refresh_cache()
         M.find_files()
+      end)
+
+      map('i', '<C-e>', function()
+        extract_via_picker(prompt_bufnr)
       end)
     end
 
@@ -586,6 +689,67 @@ function M.clear_cache()
   end
 
   print("Cache cleared")
+end
+
+function M.extract(from_prefix, to_prefix, filter)
+  if not ensure_unlocked() then
+    print("Cache is locked. Use :TelescopeCacheUnlock to unlock.")
+    return
+  end
+  if not db_connection then return end
+
+  if not from_prefix or from_prefix == "" then
+    print("from_prefix is required")
+    return
+  end
+  if not to_prefix or to_prefix == "" then
+    print("to_prefix is required")
+    return
+  end
+
+  local from_norm = strip_trailing_slash(from_prefix)
+  local to_norm = strip_trailing_slash(to_prefix)
+
+  local paths = query_cached_paths(filter)
+  local extracted, skipped, errors = 0, 0, 0
+
+  for _, file_path in ipairs(paths) do
+    local on_boundary = file_path == from_norm or
+                        file_path:sub(#from_norm + 1, #from_norm + 1) == "/"
+    if file_path:sub(1, #from_norm) ~= from_norm or not on_boundary then
+      skipped = skipped + 1
+    else
+      local rel = file_path:sub(#from_norm + 1)
+      local dest = to_norm .. rel
+      local content = get_cached_file(file_path)
+      if not content then
+        errors = errors + 1
+      else
+        local ok_parent = pcall(function()
+          local parent = Path:new(dest):parent()
+          if not parent:exists() then
+            parent:mkdir({ parents = true })
+          end
+        end)
+        if not ok_parent then
+          errors = errors + 1
+        else
+          local f, err = io.open(dest, "w")
+          if not f then
+            vim.notify("Error opening " .. dest .. ": " .. (err or "unknown"), vim.log.levels.ERROR)
+            errors = errors + 1
+          else
+            f:write(content)
+            f:close()
+            extracted = extracted + 1
+          end
+        end
+      end
+    end
+  end
+
+  print(string.format("Extracted %d file(s) to %s (skipped %d, errors %d)",
+    extracted, to_norm, skipped, errors))
 end
 
 function M.get_cache_stats()
@@ -884,6 +1048,7 @@ local function register_extension()
       live_grep = M.live_grep,
       refresh_cache = M.refresh_cache,
       clear_cache = M.clear_cache,
+      extract = M.extract,
       cache_stats = M.get_cache_stats,
       unlock_cache = M.unlock_cache,
       lock_cache = M.lock_cache,
@@ -895,5 +1060,12 @@ end
 
 -- Register the extension automatically when telescope is available
 M.register = register_extension
+
+-- Exposed for testing only
+M._internal = {
+  compute_common_prefix = compute_common_prefix,
+  strip_trailing_slash = strip_trailing_slash,
+  query_cached_paths = query_cached_paths,
+}
 
 return M

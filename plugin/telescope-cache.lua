@@ -9,6 +9,15 @@ vim.api.nvim_create_user_command('TelescopeCacheClear', function()
   require('telescope').extensions.cache.clear_cache()
 end, { desc = 'Clear telescope cache' })
 
+vim.api.nvim_create_user_command('TelescopeCacheExtract', function(opts)
+  local args = opts.fargs
+  if #args < 2 then
+    print("Usage: :TelescopeCacheExtract <from_prefix> <to_prefix> [filter]")
+    return
+  end
+  require('telescope').extensions.cache.extract(args[1], args[2], args[3])
+end, { nargs = '+', desc = 'Extract cached files to filesystem with path remapping' })
+
 vim.api.nvim_create_user_command('TelescopeCacheStats', function()
   local stats = require('telescope').extensions.cache.cache_stats()
   if stats.locked then
