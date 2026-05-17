@@ -75,9 +75,45 @@ Following commands are available:
 - **TelescopeCacheStats**: Print cache stats
 - **TelescopeCacheFiles**: Find files in cache
 - **TelescopeCacheGrep**: Find by grep
+- **TelescopeCacheExtract**: Extract cached files back to the local filesystem, with optional path remapping. See [Extracting cached files](#extracting-cached-files)
 - **TelescopeCacheUnlock**: Unlock cache. It will ask the password if encryption is enabled
 - **TelescopeCacheLock**: Lock the cache if it is unlocked. It will require entering a password again to access it
 - **TelescopeCacheStatus**: Prints cache status: Locked or Unlocked
+
+### Extracting cached files
+
+Cached files can be written back to disk so that you can work offline against a layout that may differ from where the files were originally cached (e.g. a remote project at `/remote/proj` extracted into a local checkout at `~/work/proj`).
+
+**From the command line:**
+
+```vim
+:TelescopeCacheExtract <from_prefix> <to_prefix> [filter]
+```
+
+Every cached path that starts with `from_prefix` (on a `/` boundary) is rewritten so the prefix becomes `to_prefix`, parent directories are created as needed, and the content is written there. Trailing slashes on either prefix are normalized. The optional `filter` is a SQL `LIKE` substring matched against the cached path — use it to extract a subset.
+
+Example:
+
+```vim
+:TelescopeCacheExtract /remote/proj /home/me/proj
+:TelescopeCacheExtract /remote/proj /home/me/proj .lua
+```
+
+**From the `TelescopeCacheFiles` picker (`<C-e>`):**
+
+While searching cached files, press `Ctrl-e` to extract everything matching the current prompt:
+
+1. The plugin re-queries the cache (no UI limit) to gather every match.
+2. It computes the longest shared directory prefix across those matches and offers it as the default `from_prefix` — confirm with Enter or edit it.
+3. You're then prompted for `to_prefix`, pre-populated with the current working directory.
+
+Files are overwritten if they already exist; press `Ctrl-c` or submit an empty prefix to cancel.
+
+**Programmatic use:**
+
+```lua
+require('telescope').extensions.cache.extract(from_prefix, to_prefix, filter)
+```
 
 ## Security & Threat Model
 
@@ -143,25 +179,43 @@ This plugin includes automated tests to ensure encryption and caching functional
    make install-deps
    ```
 
-2. **Run all tests:**
+2. **Run encryption tests:**
    ```bash
    make test
    ```
 
-3. **Run specific test file:**
+3. **Run the full suite (encryption + integration):**
+   ```bash
+   make test-all
+   ```
+
+4. **Run a specific test file:**
    ```bash
    make test-file FILE=sqlcipher_ffi_spec.lua
    ```
 
-4. **Verify SQLCipher installation:**
+5. **Verify SQLCipher installation:**
    ```bash
    make check-sqlcipher
    ```
 
-5. **Quick smoke test:**
+6. **Quick smoke test:**
    ```bash
    make smoke
    ```
+
+### Running Tests in Docker
+
+If you'd rather not install Neovim, plenary, telescope, and vusted locally, a containerized harness ships with the repo. It pins the same Neovim stable that CI uses and bakes the rest of the runtime dependencies into the image:
+
+```bash
+make docker-build      # build the image (one-time, ~1-2 min)
+make docker-test       # run the encryption suite
+make docker-test-all   # run the full suite (encryption + integration)
+make docker-shell      # interactive shell with the repo mounted
+```
+
+The repo is mounted at `/workspace`, so edits on your host take effect inside the container without rebuilding the image.
 
 ### Test Structure
 
@@ -176,11 +230,11 @@ tests/
 
 Tests run automatically on push and pull requests via GitHub Actions. The workflow:
 - Tests on both Neovim stable and nightly
-- Installs libsqlcipher0
-- Runs the full test suite
+- Installs libsqlcipher
+- Runs the encryption suite and the integration suite
 - Verifies encryption is working
 
-See `.github/workflows/test.yml` for details.
+See `.github/workflows/tests.yml` for details.
 
 ## Contributing
 
